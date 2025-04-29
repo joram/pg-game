@@ -1,0 +1,20 @@
+FROM golang:1.22.5-alpine AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CGO_ENABLED=1
+WORKDIR /app
+
+# install dependencies
+ADD go.mod go.sum /app
+RUN go mod download
+
+# build binary
+COPY . .
+RUN go build -o /zork ./main.go
+RUN chmod +x /zork
+
+# final stage
+FROM alpine:latest
+COPY --from=builder /zork /zork
+
+EXPOSE 5432
+CMD ["/zork"]
