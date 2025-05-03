@@ -8,17 +8,18 @@ import (
 )
 
 type Action interface {
-	Execute(backend *pgproto3.Backend, world *interfaces.World)
+	Execute(backend *pgproto3.Backend, world *interfaces.WorldInterface)
 }
 
 type ListCommandsAction struct {
 }
 
-func (h *ListCommandsAction) Execute(backend *pgproto3.Backend, world *interfaces.World) {
+func (h *ListCommandsAction) Execute(backend *pgproto3.Backend, world *interfaces.WorldInterface) {
 	introLines := []string{
 		" ",
 		"***********************************************",
 		"Welcome to your very own Text-Based Adventure!",
+		fmt.Sprintf("  - we currently have %d locations to explore", len(world.Locations)),
 		"***********************************************",
 	}
 	for _, verb := range verbs.AllVerbs {

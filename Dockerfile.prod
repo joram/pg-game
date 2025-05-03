@@ -1,19 +1,24 @@
-FROM golang:1.22.5-alpine AS builder
+FROM golang:1.23.7-alpine AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CGO_ENABLED=1
 WORKDIR /app
+RUN apk add --no-cache libgcc libstdc++ clang-dev
 
 # install dependencies
 ADD go.mod go.sum /app
+RUN go mod tidy
 RUN go mod download
 
 # build binary
-COPY . .
-RUN go build -o /zork ./main.go
+COPY ./ /app
+RUN go mod tidy
+
+RUN go build -o /zork /app
 RUN chmod +x /zork
 
 # final stage
 FROM alpine:latest
+RUN apk --no-cache add curl
 COPY --from=builder /zork /zork
 
 EXPOSE 5432

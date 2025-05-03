@@ -7,7 +7,7 @@ import (
 
 type LookAction struct{}
 
-func (l *LookAction) Execute(backend *pgproto3.Backend, world *interfaces.World) {
+func (l *LookAction) Execute(backend *pgproto3.Backend, world *interfaces.WorldInterface) {
 	description := world.CurrentLocation.Describe()
 	backend.Send(&pgproto3.NoticeResponse{
 		Severity: "",

@@ -1,7 +1,6 @@
 package simple_example
 
 import (
-	"fmt"
 	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
 )
 
@@ -15,26 +14,51 @@ func (f FirstDoorKey) Name() string {
 func (f FirstDoorKey) Description() string {
 	return "This is a key to a door."
 }
+func (f FirstDoorKey) Examine() string {
+	return "This is a key to a door. it looks fragile, like it could break easily."
+}
 
 var LocationNameStarting = "Starting Location"
 
-type LocationStartingRoom struct {
-	items        []interfaces.ItemInterface
+type StartingRoom struct {
 	doorUnlocked bool
+	keyObtained  bool
+	world        interfaces.WorldInterface
 }
 
-func (l *LocationStartingRoom) UseItem(item interfaces.ItemInterface, targetName string) string {
-	if item == firstDoorKey && targetName == "door" {
-		l.doorUnlocked = true
-		return "You unlock the door with the key."
+func NewStartingRoom(world interfaces.WorldInterface) *StartingRoom {
+	return &StartingRoom{
+		doorUnlocked: false,
+		world:        world,
 	}
-	return "You can't use that item on that target."
 }
 
-func (l *LocationStartingRoom) Go(name string) (bool, string, interfaces.LocationInterface) {
+func (l *StartingRoom) Examine(name string) string {
+	if name == "door" {
+		if l.doorUnlocked {
+			return "The door is unlocked."
+		}
+		return "The door is locked."
+	}
+	return "I am not sure what you mean."
+}
+
+func (l *StartingRoom) TalkTo(name string) string {
+	return "there is nobody to talk to here"
+}
+
+func (l *StartingRoom) UseItem(item interfaces.ItemInterface, targetName string) (string, bool) {
+	if item.Name() == "key" && targetName == "door" {
+		l.doorUnlocked = true
+		return "You unlock the door with the key. The key breaks in the lock, but you manage to open the door before it does.", false
+	}
+	return "You can't use that item on that target.", true
+}
+
+func (l *StartingRoom) Go(world interfaces.WorldInterface, name string) (bool, string, interfaces.LocationInterface) {
 	if name == "north" {
 		if l.doorUnlocked {
-			return true, "You go through the door to the north.", frontSteps
+			return true, "You go through the door to the north.", world.GetLocationByName("Front Steps")
 		}
 		return false, "The door is locked.", nil
 	}
@@ -50,39 +74,28 @@ func (l *LocationStartingRoom) Go(name string) (bool, string, interfaces.Locatio
 	return false, "You can't go that way.", nil
 }
 
-func (l *LocationStartingRoom) TakeItemByName(name string) interfaces.ItemInterface {
-	for i, item := range l.items {
-		if item.Name() == name {
-			takenItem := l.items[i]
-			l.items = append(l.items[:i], l.items[i+1:]...)
-			return takenItem
-		}
+func (l *StartingRoom) TakeItemByName(world interfaces.WorldInterface, name string) (interfaces.ItemInterface, string) {
+	if name == "key" && !l.keyObtained {
+		l.keyObtained = true
+		return FirstDoorKey{}, "You take the key."
 	}
-	return nil
+	return nil, "You can't take that item."
 }
 
-func (l *LocationStartingRoom) ListKnownItems() []interfaces.ItemInterface {
-	return l.items
-}
-
-func (l *LocationStartingRoom) Name() string {
+func (l *StartingRoom) Name() string {
 	return LocationNameStarting
 }
-func (l *LocationStartingRoom) Describe() string {
+func (l *StartingRoom) Describe() string {
 	s := "You are in a small room with a door to the north."
 
-	if len(l.ListKnownItems()) > 0 {
-		s += "\nYou see the following items:"
-		for _, item := range l.ListKnownItems() {
-			s = fmt.Sprintf("%s %s", s, item.Name())
-		}
+	if !l.doorUnlocked {
+		s += " The door is locked."
+	} else {
+		s += " The door is unlocked."
+	}
+
+	if !l.keyObtained {
+		s += " There is a key on the floor."
 	}
 	return s
-}
-
-var firstDoorKey = FirstDoorKey{}
-var start = LocationStartingRoom{
-	items: []interfaces.ItemInterface{
-		firstDoorKey,
-	},
 }

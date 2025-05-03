@@ -15,9 +15,9 @@ const (
 )
 
 type VerbInterface interface {
-	Execute(*interfaces.World)
-	ExecuteOnItem(*interfaces.World, interfaces.ItemInterface)
-	//ExecuteOnNpc(*world.World, *world.Location)
+	Execute(*interfaces.WorldInterface)
+	ExecuteOnItem(*interfaces.WorldInterface, interfaces.ItemInterface)
+	//ExecuteOnNpc(*world.WorldInterface, *world.Location)
 }
 
 type Verb struct {
@@ -53,7 +53,7 @@ var VerbUse = Verb{
 
 var AllVerbs = []Verb{
 	VerbLook,
-	VerbExamine,
+	//VerbExamine,
 	VerbGo,
 	VerbTake,
 	VerbUse,
