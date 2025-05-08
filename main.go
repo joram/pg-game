@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/veilstream/psql-text-based-adventure/core/actions"
-	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
 	"github.com/veilstream/psql-text-based-adventure/worlds/simple_example"
 	"io"
 	"log"
@@ -12,12 +11,6 @@ import (
 	"net/http"
 	"strings"
 )
-
-type Engine struct {
-	Worlds       []interfaces.WorldInterface
-	currentWorld *interfaces.WorldInterface
-	psqlBackend  *pgproto3.Backend
-}
 
 func main() {
 	go func() {
@@ -28,7 +21,6 @@ func main() {
 				fmt.Printf("error responding to healthcheck: %v", err)
 				return
 			}
-			log.Printf("Health check OK\n")
 		})
 
 		addr := "0.0.0.0:80"
@@ -71,10 +63,10 @@ func handleConnection(conn net.Conn) {
 		fmt.Printf("Error receiving startup message: %v\n", err)
 		return
 	}
-	world := simple_example.NewSimpleWorld(&interfaces.Inventory{})
+
+	world := simple_example.NewSimpleWorld(backend)
 	engine := Engine{
-		currentWorld: &world,
-		Worlds:       []interfaces.WorldInterface{world},
+		currentWorld: world,
 		psqlBackend:  backend,
 	}
 
@@ -106,14 +98,99 @@ func handleConnection(conn net.Conn) {
 		switch m := msg.(type) {
 		case *pgproto3.Query:
 			query := m.String
-			query = strings.Replace(query, "\n", "", -1)
-			query = strings.Replace(query, ";", "", -1)
-			engine.handleQuery(query)
+			fmt.Printf("Received query: %s\n", query)
+			if strings.HasPrefix(query, "SELECT version()") {
+				engine.psqlBackend.Send(&pgproto3.RowDescription{
+					Fields: []pgproto3.FieldDescription{
+						{Name: []byte("version")},
+					},
+				})
+				engine.psqlBackend.Send(&pgproto3.DataRow{
+					Values: [][]byte{[]byte("foo")},
+				})
+				engine.psqlBackend.Send(&pgproto3.CommandComplete{
+					CommandTag: []byte("SELECT 1"),
+				})
+				engine.psqlBackend.Send(&pgproto3.ReadyForQuery{})
+				err := engine.psqlBackend.Flush()
+				if err != nil {
+					fmt.Printf("Error flushing psql backend: %v\n", err)
+					return
+				}
+				continue
+			}
+			if strings.HasPrefix(query, "SELECT ") && strings.HasSuffix(query, "as type;") {
+				engine.psqlBackend.Send(&pgproto3.RowDescription{
+					Fields: []pgproto3.FieldDescription{
+						{Name: []byte("type")},
+					},
+				})
+				engine.psqlBackend.Send(&pgproto3.DataRow{
+					Values: [][]byte{
+						[]byte("log"),
+					},
+				})
+				engine.psqlBackend.Send(&pgproto3.CommandComplete{
+					CommandTag: []byte("SELECT 1"),
+				})
+				engine.psqlBackend.Send(&pgproto3.ReadyForQuery{})
+				err = engine.psqlBackend.Flush()
+				if err != nil {
+					fmt.Printf("Error flushing psql backend: %v\n", err)
+					return
+				}
+				continue
 
+			}
 			if strings.HasPrefix(query, "SELECT ") {
 				engine.psqlBackend.Send(&pgproto3.RowDescription{
 					Fields: []pgproto3.FieldDescription{},
 				})
+				engine.psqlBackend.Send(&pgproto3.DataRow{
+					Values: [][]byte{},
+				})
+				engine.psqlBackend.Send(&pgproto3.CommandComplete{
+					CommandTag: []byte("SELECT 0"),
+				})
+				engine.psqlBackend.Send(&pgproto3.ReadyForQuery{})
+				err = engine.psqlBackend.Flush()
+				if err != nil {
+					fmt.Printf("Error flushing psql backend: %v\n", err)
+					return
+				}
+				continue
+			}
+			if strings.HasPrefix(query, "SET ") {
+				engine.psqlBackend.Send(&pgproto3.CommandComplete{
+					CommandTag: []byte("SET"),
+				})
+				engine.psqlBackend.Send(&pgproto3.ReadyForQuery{})
+				err = engine.psqlBackend.Flush()
+				if err != nil {
+					fmt.Printf("Error flushing psql backend: %v\n", err)
+					return
+				}
+				continue
+			}
+			query = strings.Replace(query, "\n", "", -1)
+			query = strings.Replace(query, ";", "", -1)
+			engine.handleQuery(query)
+
+			if engine.gameOver {
+				for _, row := range tombStone {
+					engine.Say(row)
+				}
+				engine.psqlBackend.Send(&pgproto3.ErrorResponse{
+					Severity: "FATAL",
+					Message:  "You have died. Please restart the game.",
+					Code:     "ADMIN_SHUTDOWN",
+				})
+				err := engine.psqlBackend.Flush()
+				if err != nil {
+					fmt.Printf("Error flushing psql backend: %v\n", err)
+					return
+				}
+				return
 			}
 			engine.psqlBackend.Send(&pgproto3.ReadyForQuery{})
 			err := engine.psqlBackend.Flush()
@@ -137,149 +214,25 @@ func handleConnection(conn net.Conn) {
 	}
 }
 
-func (engine *Engine) handleQuery(query string) {
-	fmt.Printf("Handling query: %s\n", query)
-
-	if strings.HasPrefix(query, "look") {
-		engine.Look()
-		return
-	}
-
-	if strings.HasPrefix(query, "commands") {
-		engine.Commands()
-		return
-	}
-
-	if strings.HasPrefix(query, "take") {
-		engine.Take(query)
-		return
-	}
-
-	if strings.HasPrefix(query, "inventory") {
-		engine.Inventory()
-		return
-	}
-
-	if strings.HasPrefix(query, "go") {
-		engine.Go(query)
-		return
-	}
-
-	if strings.HasPrefix(query, "use") {
-		engine.Use(query)
-		return
-	}
-
-	// Unknown command
-	engine.psqlBackend.Send(&pgproto3.NoticeResponse{
-		Severity: "",
-		Message:  fmt.Sprintf("I don't know how to '%s'", query),
-	})
-}
-
-func (engine *Engine) Say(msg string) {
-	engine.psqlBackend.Send(&pgproto3.NoticeResponse{
-		Severity: "",
-		Message:  msg,
-	})
-}
-
-func (engine *Engine) Sayf(format string, a ...any) {
-	s := fmt.Sprintf(format, a...)
-	engine.psqlBackend.Send(&pgproto3.NoticeResponse{
-		Severity: "",
-		Message:  s,
-	})
-}
-
-func (engine *Engine) Look() {
-	action := actions.LookAction{}
-	action.Execute(engine.psqlBackend, engine.currentWorld)
-}
-
-func (engine *Engine) Commands() {
-	action := actions.ListCommandsAction{}
-	action.Execute(engine.psqlBackend, engine.currentWorld)
-}
-
-func (engine *Engine) Take(query string) {
-	itemName := strings.TrimSpace(strings.TrimPrefix(query, "take"))
-	item, msg := engine.currentWorld.CurrentLocation.TakeItemByName(*engine.currentWorld, itemName)
-	engine.Say(msg)
-	if item == nil {
-		return
-	}
-	engine.currentWorld.Inventory.AddItem(item)
-	engine.Sayf("You now have a %s", item.Name())
-}
-
-func (engine *Engine) Inventory() {
-	items := engine.currentWorld.Inventory.ListItems()
-	if len(items) == 0 {
-		engine.Say("Your inventory is empty.")
-		return
-	}
-	inventoryList := "You have the following items in your inventory:"
-	for _, item := range items {
-		inventoryList = fmt.Sprintf("%s, %s", inventoryList, item.Name())
-	}
-	engine.Say(inventoryList)
-
-}
-
-func (engine *Engine) Go(query string) {
-	locationName := strings.TrimSpace(strings.TrimPrefix(query, "go"))
-	fmt.Printf("attempting to go to '%s'\n", locationName)
-	success, msg, New := engine.currentWorld.CurrentLocation.Go(*engine.currentWorld, locationName)
-	if !success {
-		engine.Say(msg)
-		return
-	}
-	engine.Sayf("You go %s", locationName)
-	engine.currentWorld.CurrentLocation = New
-}
-
-func (engine *Engine) Use(query string) {
-	removedUseStr := strings.TrimSpace(strings.TrimPrefix(query, "use"))
-	parts := strings.Split(removedUseStr, " on ")
-	if len(parts) != 2 {
-		engine.Say("Usage: use <item> on <target>")
-		return
-	}
-	itemName := strings.TrimSpace(parts[0])
-	targetName := strings.TrimSpace(parts[1])
-	item := engine.currentWorld.Inventory.RemoveItem(itemName)
-	if item == nil {
-		engine.Sayf("You do not have a  '%s' in your inventory", itemName)
-		return
-	}
-
-	msg, keep := engine.currentWorld.CurrentLocation.UseItem(item, targetName)
-	engine.Say(msg)
-	if keep {
-		engine.currentWorld.Inventory.AddItem(item)
-	}
-}
-
-func (engine *Engine) Examine(query string) {
-	itemName := strings.TrimSpace(strings.TrimPrefix(query, "examine"))
-	// First try inventory
-	for _, item := range engine.currentWorld.Inventory.ListItems() {
-		if item.Name() == itemName {
-			engine.Say(item.Examine())
-			return
-		}
-	}
-	// Then try the location
-	engine.Say(engine.currentWorld.CurrentLocation.Examine(itemName))
-}
-
-func (engine *Engine) TalkTo(query string) {
-	name := strings.TrimSpace(strings.TrimPrefix(query, "talk to"))
-	response := engine.currentWorld.CurrentLocation.TalkTo(name)
-	if response == "" {
-		engine.Sayf("There's no one named '%s' here to talk to.", name)
-		return
-	}
-	engine.Say(response)
+var tombStone = []string{
+	"         _.-'\"\"-._    ",
+	"       .-'        '-.    ",
+	"     .'   Rest In     '.    ",
+	"    /      Peace       \\    ",
+	"   /--------------------\\    ",
+	"  |  .----------------.  |    ",
+	"  |  |   _________    |  |    ",
+	"  |  |  /         \\   |  |    ",
+	"  |  | |  o     o |   |  |    ",
+	"  |  | |     ^    |   |  |    ",
+	"  |  | |    ___   |   |  |    ",
+	"  |  |  \\_________/   |  |    ",
+	"  |  |                |  |    ",
+	"  |  |  ???? - 2025   |  |    ",
+	"  |  '----------------'  |    ",
+	"  \\____________________/    ",
+	"  /\\/\\/\\/\\/\\/\\/\\/\\/\\    ",
+	"  / ___  ___  ___  __\\    ",
+	"  /_/   \\/   \\/   \\/  /    ",
+	" \\__________________/    ",
 }

@@ -1,63 +1,29 @@
-package simple_example
+package locations
 
 import (
-	"fmt"
 	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+	"github.com/veilstream/psql-text-based-adventure/worlds/simple_example/items"
 )
 
 var LocationNameShedInterior = "Shed Interior"
 
-type ItemOldSword struct{}
-
-func (i ItemOldSword) Name() string { return "old sword" }
-func (i ItemOldSword) Description() string {
-	return "A heavy, time‑worn longsword. Its edge is still sharp enough to hack through thick vines."
-}
-func (i ItemOldSword) Examine() string {
-	return "A heavy, time‑worn longsword. Its edge is still sharp enough to hack through thick vines. or scare off small creatures"
-}
-
-type ItemBowl struct {
-	Full     bool
-	Contents string
-}
-
-func (b ItemBowl) Name() string {
-	if b.Full {
-		return "bowl full of " + b.Contents
-	}
-	return "an empty bowl"
-}
-
-func (b ItemBowl) Description() string {
-	if b.Full {
-		return fmt.Sprintf("Bowl full of %s", b.Contents)
-	}
-
-	return fmt.Sprintf("A bowl, it looks like it could hold something. Probably %s.", b.Contents)
-}
-func (b ItemBowl) Examine() string {
-	if b.Full {
-		return fmt.Sprintf("A bowl full of %s", b.Contents)
-	}
-	return "An empty bowl."
-}
-
 type ShedInterior struct {
-	sword      ItemOldSword
-	bowl       ItemBowl
+	sword      items.ItemOldSword
+	bowl       items.ItemBowl
 	swordTaken bool
 	bowlTaken  bool
-	world      interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewShedInterior(world interfaces.WorldInterface) *ShedInterior {
 	return &ShedInterior{
-		sword: ItemOldSword{},
-		bowl: ItemBowl{
+		sword: items.ItemOldSword{},
+		bowl: items.ItemBowl{
 			Full: false,
 		},
-		world: world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -94,17 +60,7 @@ func (l *ShedInterior) Describe() string {
 	return desc
 }
 
-func (l *ShedInterior) ListKnownItems() []interfaces.ItemInterface {
-
-	var oldSword = ItemOldSword{}
-
-	if l.swordTaken {
-		return nil
-	}
-	return []interfaces.ItemInterface{oldSword}
-}
-
-func (l *ShedInterior) TakeItemByName(world interfaces.WorldInterface, name string) (interfaces.ItemInterface, string) {
+func (l *ShedInterior) TakeItemByName(name string) (interfaces.ItemInterface, string) {
 	if name == "bowl" {
 		return &l.bowl, "You take empty the bowl."
 	}
@@ -120,12 +76,12 @@ func (l *ShedInterior) TakeItemByName(world interfaces.WorldInterface, name stri
 	return nil, "You can't take that."
 }
 
-func (l *ShedInterior) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (l *ShedInterior) Go(dir string) (string, *interfaces.LocationInterface) {
 	switch dir {
 	case "out":
-		return true, "You step back outside.", world.GetLocationByName("Shed Exterior")
+		return "You step back outside.", l.BaseLocation.World.GetLocationByName("Shed Exterior")
 	default:
-		return false, "You bump into a wall.", nil
+		return "You bump into a wall.", nil
 	}
 }
 

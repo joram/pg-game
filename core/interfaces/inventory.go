@@ -18,6 +18,15 @@ func (i *Inventory) RemoveItem(name string) ItemInterface {
 	return nil
 }
 
+func (i *Inventory) PeekItem(name string) ItemInterface {
+	for _, invItem := range i.Items {
+		if invItem.Name() == name {
+			return invItem
+		}
+	}
+	return nil
+}
+
 func (i *Inventory) ListItems() []ItemInterface {
 	return i.Items
 }

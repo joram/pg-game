@@ -20,9 +20,10 @@ def load_inventory():
 def load_world():
     contents = ""
 
-    for filename in os.listdir("./simple_example/"):
+    for filename in os.listdir("./simple_example/locations"):
         if filename.endswith(".go"):
-            with open(os.path.join("./simple_example/", filename), "r") as f:
+            contents += f"// ************ {filename} ************\n"
+            with open(os.path.join("./simple_example/locations", filename), "r") as f:
                 contents += f.read()
                 contents += "\n"
 

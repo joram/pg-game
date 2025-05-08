@@ -1,16 +1,20 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+)
 
 var LocationNameWoodsEntrance = "Woods Entrance"
 
 type WoodsEntrance struct {
-	world interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewWoodsEntrance(world interfaces.WorldInterface) *WoodsEntrance {
 	return &WoodsEntrance{
-		world: world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -37,20 +41,19 @@ func (w WoodsEntrance) Describe() string {
 	return "Tall firs loom ahead, their branches choking out the moonlight. A narrow path disappears into the darkness to the north. To the south, the house is visible."
 }
 
-func (w WoodsEntrance) ListKnownItems() []interfaces.ItemInterface { return nil }
-func (w WoodsEntrance) TakeItemByName(interfaces.WorldInterface, string) (interfaces.ItemInterface, string) {
+func (w WoodsEntrance) TakeItemByName(string) (interfaces.ItemInterface, string) {
 	return nil, "There is nothing to take."
 }
 
-func (w WoodsEntrance) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (w WoodsEntrance) Go(dir string) (string, *interfaces.LocationInterface) {
 	switch dir {
 	case "south":
-		return true, "You head back to the front steps.", world.GetLocationByName("Front Steps")
+		return "You head back to the front steps.", w.BaseLocation.World.GetLocationByName("Front Steps")
 	case "north":
 		// The engine should enforce the player has a lantern; we allow for now.
-		return true, "You follow the dark path deeper into the woods.", world.GetLocationByName("Forked Path")
+		return "You follow the dark path deeper into the woods.", w.BaseLocation.World.GetLocationByName("Forked Path")
 	default:
-		return false, "You can't go that way.", nil
+		return "You can't go that way.", nil
 	}
 }
 

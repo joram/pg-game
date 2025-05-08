@@ -1,16 +1,20 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+)
 
 var LocationNameHiddenForestShrine = "Hidden Forest Shrine"
 
 type HiddenForestShrine struct {
-	world interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewHiddenForestShrine(world interfaces.WorldInterface) *HiddenForestShrine {
 	return &HiddenForestShrine{
-		world: world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -47,9 +51,7 @@ A voice, warm and ancient, echoes in your mind:
 You feel a path opening before you — not one you can see, but one you will choose.`
 }
 
-func (l *HiddenForestShrine) ListKnownItems() []interfaces.ItemInterface { return nil }
-
-func (l *HiddenForestShrine) TakeItemByName(world interfaces.WorldInterface, name string) (interfaces.ItemInterface, string) {
+func (l *HiddenForestShrine) TakeItemByName(name string) (interfaces.ItemInterface, string) {
 	return nil, "There is nothing to take here — only serenity."
 }
 
@@ -57,9 +59,9 @@ func (l *HiddenForestShrine) UseItem(item interfaces.ItemInterface, target strin
 	return "You kneel at the shrine. It hums softly in response.", true
 }
 
-func (l *HiddenForestShrine) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (l *HiddenForestShrine) Go(dir string) (string, *interfaces.LocationInterface) {
 	if dir == "up" {
-		return true, "You climb back up the repaired ladder.", world.GetLocationByName("Ravine Edge")
+		return "You climb back up the repaired ladder.", l.BaseLocation.World.GetLocationByName("Ravine Edge")
 	}
-	return false, "Only trees surround you.", nil
+	return "Only trees surround you.", nil
 }

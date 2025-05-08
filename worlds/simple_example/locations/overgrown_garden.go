@@ -1,18 +1,22 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+)
 
 var LocationNameOvergrownGarden = "Overgrown Garden"
 
 type OvergrownGarden struct {
 	vinesCut bool
-	world    interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewOvergrownGarden(world interfaces.WorldInterface) *OvergrownGarden {
 	return &OvergrownGarden{
 		vinesCut: false,
-		world:    world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -37,34 +41,33 @@ func (g *OvergrownGarden) Name() string { return LocationNameOvergrownGarden }
 
 func (g *OvergrownGarden) Describe() string {
 	if g.vinesCut {
-		return "An old stone plinth stands cleared of vines. Its lid lies ajar, revealing a stairway descending into darkness."
+		return "An old stone tomb stands cleared of vines. Its lid lies ajar, revealing a stairway descending into darkness."
 	}
-	return "Broken fountains and knee high ivy choke the clearing. Thick vines coil around a waist high stone plinth at the center."
+	return "Broken fountains and knee high ivy choke the clearing. Thick vines coil around a waist high stone tomb at the center."
 }
 
-func (g *OvergrownGarden) ListKnownItems() []interfaces.ItemInterface { return nil }
-func (g *OvergrownGarden) TakeItemByName(interfaces.WorldInterface, string) (interfaces.ItemInterface, string) {
+func (g *OvergrownGarden) TakeItemByName(string) (interfaces.ItemInterface, string) {
 	return nil, "There's nothing here to pick up."
 }
 
 func (g *OvergrownGarden) UseItem(item interfaces.ItemInterface, target string) (string, bool) {
 	if item.Name() == "old sword" && target == "vines" && !g.vinesCut {
 		g.vinesCut = true
-		return "You hack through the vines, clearing the plinth and revealing a hidden stairway leading down.", true
+		return "You hack through the vines, clearing the tomb and revealing a hidden stairway leading down.", true
 	}
 	return "That doesn't work.", true
 }
 
-func (g *OvergrownGarden) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (g *OvergrownGarden) Go(dir string) (string, *interfaces.LocationInterface) {
 	switch dir {
 	case "east":
-		return true, "You return to the fork in the path.", world.GetLocationByName("Forked Path")
+		return "You return to the fork in the path.", g.BaseLocation.World.GetLocationByName("Forked Path")
 	case "down":
 		if g.vinesCut {
-			return true, "You descend the narrow stone steps.", world.GetLocationByName("Cave Mouth")
+			return "You descend the narrow stone steps.", g.BaseLocation.World.GetLocationByName("Tomb Entrance")
 		}
-		return false, "Thick vines block any passage downward.", nil
+		return "Thick vines block any passage downward.", nil
 	default:
-		return false, "Shrubs and trees block your path.", nil
+		return "Shrubs and trees block your path.", nil
 	}
 }

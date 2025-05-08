@@ -1,28 +1,22 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
-
-type WoodenPlank struct{}
-
-func (p WoodenPlank) Examine() string {
-	return "A long, flat plank — perfect for patching something."
-}
-
-func (p WoodenPlank) Name() string { return "wooden plank" }
-func (p WoodenPlank) Description() string {
-	return "A long, flat plank — perfect for patching something."
-}
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+	"github.com/veilstream/psql-text-based-adventure/worlds/simple_example/items"
+)
 
 var LocationNameFallenTree = "Fallen Tree"
 
 type FallenTree struct {
 	plankTaken bool
-	world      interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewFallenTree(world interfaces.WorldInterface) *FallenTree {
 	return &FallenTree{
-		world: world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -52,17 +46,10 @@ func (l *FallenTree) Describe() string {
 	return "A mossy fallen tree blocks part of the path. One of its planks is loose and looks usable."
 }
 
-func (l *FallenTree) ListKnownItems() []interfaces.ItemInterface {
-	if !l.plankTaken {
-		return []interfaces.ItemInterface{WoodenPlank{}}
-	}
-	return nil
-}
-
-func (l *FallenTree) TakeItemByName(world interfaces.WorldInterface, name string) (interfaces.ItemInterface, string) {
+func (l *FallenTree) TakeItemByName(name string) (interfaces.ItemInterface, string) {
 	if name == "wooden plank" && !l.plankTaken {
 		l.plankTaken = true
-		return WoodenPlank{}, "You pry a plank loose from the tree trunk."
+		return items.WoodenPlank{}, "You pry a plank loose from the tree trunk."
 	}
 	return nil, "You can't take that."
 }
@@ -71,9 +58,9 @@ func (l *FallenTree) UseItem(item interfaces.ItemInterface, target string) (stri
 	return "Nothing happens.", true
 }
 
-func (l *FallenTree) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (l *FallenTree) Go(dir string) (string, *interfaces.LocationInterface) {
 	if dir == "east" {
-		return true, "You walk back toward the mushroom grove.", world.GetLocationByName("Mushroom Grove")
+		return "You walk back toward the mushroom grove.", l.BaseLocation.World.GetLocationByName("Mushroom Grove")
 	}
-	return false, "There’s too much brush that way.", nil
+	return "There’s too much brush that way.", nil
 }

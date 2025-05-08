@@ -3,18 +3,18 @@ package actions
 import (
 	"fmt"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
 	"github.com/veilstream/psql-text-based-adventure/core/verbs"
+	"github.com/veilstream/psql-text-based-adventure/core/world"
 )
 
 type Action interface {
-	Execute(backend *pgproto3.Backend, world *interfaces.WorldInterface)
+	Execute(backend *pgproto3.Backend, world *world.World)
 }
 
 type ListCommandsAction struct {
 }
 
-func (h *ListCommandsAction) Execute(backend *pgproto3.Backend, world *interfaces.WorldInterface) {
+func (h *ListCommandsAction) Execute(backend *pgproto3.Backend, world *world.World) {
 	introLines := []string{
 		" ",
 		"***********************************************",

@@ -1,18 +1,22 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+)
 
 var LocationNameRavineEdge = "Ravine Edge"
 
 type RavineEdge struct {
 	ladderFixed bool
-	world       interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewRavineEdge(world interfaces.WorldInterface) *RavineEdge {
 	return &RavineEdge{
 		ladderFixed: false,
-		world:       world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -42,17 +46,13 @@ func (r *RavineEdge) Describe() string {
 	return "You reach a ravine. A broken ladder lies splintered nearby. It's too dangerous to climb without fixing it."
 }
 
-func (r *RavineEdge) ListKnownItems() []interfaces.ItemInterface {
-	return nil
-}
-
-func (r *RavineEdge) TakeItemByName(world interfaces.WorldInterface, name string) (interfaces.ItemInterface, string) {
+func (r *RavineEdge) TakeItemByName(name string) (interfaces.ItemInterface, string) {
 	return nil, "There’s nothing to take."
 }
 
 func (r *RavineEdge) UseItem(item interfaces.ItemInterface, target string) (string, bool) {
 	if item.Name() == "wooden plank" && target == "ladder" && !r.ladderFixed {
-		if r.world.Inventory.HaveItem("sticky sap") {
+		if r.BaseLocation.World.HasInInventory("sticky sap") {
 			r.ladderFixed = true
 			return "You patch the broken ladder with the plank and seal it with sticky sap.", true
 		}
@@ -61,15 +61,15 @@ func (r *RavineEdge) UseItem(item interfaces.ItemInterface, target string) (stri
 	return "That doesn't work here.", true
 }
 
-func (r *RavineEdge) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (r *RavineEdge) Go(dir string) (string, *interfaces.LocationInterface) {
 	if dir == "north" {
-		return true, "You head back to the mushroom grove.", world.GetLocationByName("Mushroom Grove")
+		return "You head back to the mushroom grove.", r.BaseLocation.World.GetLocationByName("Mushroom Grove")
 	}
 	if dir == "down" {
 		if r.ladderFixed {
-			return true, "You carefully descend the ladder into the ravine.", world.GetLocationByName("Hidden Forest Shrine")
+			return "You carefully descend the ladder into the ravine.", r.BaseLocation.World.GetLocationByName("Hidden Forest Shrine")
 		}
-		return false, "The ladder is broken — it's too dangerous to climb down.", nil
+		return "The ladder is broken — it's too dangerous to climb down.", nil
 	}
-	return false, "You can't go that way.", nil
+	return "You can't go that way.", nil
 }

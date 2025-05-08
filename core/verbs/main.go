@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+	"github.com/veilstream/psql-text-based-adventure/core/world"
 )
 
 type VerbName string
@@ -15,9 +16,9 @@ const (
 )
 
 type VerbInterface interface {
-	Execute(*interfaces.WorldInterface)
-	ExecuteOnItem(*interfaces.WorldInterface, interfaces.ItemInterface)
-	//ExecuteOnNpc(*world.WorldInterface, *world.Location)
+	Execute(*world.World)
+	ExecuteOnItem(*world.World, interfaces.ItemInterface)
+	//ExecuteOnNpc(*world.World, *world.Location)
 }
 
 type Verb struct {
@@ -51,10 +52,46 @@ var VerbUse = Verb{
 	Description: "Use an item",
 }
 
+var VerbTalk = Verb{
+	Name:        "talk",
+	Description: "Talk to someone",
+}
+
+var VerbInventory = Verb{
+	Name:        "inventory",
+	Description: "Check your inventory",
+}
+
+var VerbDrop = Verb{
+	Name:        "drop",
+	Description: "Drop an item on the ground",
+}
+
+var VerbTeleport = Verb{
+	Name:        "teleport",
+	Description: "Teleport to a different location",
+}
+
+var VerbQuit = Verb{
+	Name:        "quit",
+	Description: "Quit the game",
+}
+
+var VerbCommands = Verb{
+	Name:        "commands",
+	Description: "List all available commands",
+}
+
 var AllVerbs = []Verb{
+	VerbCommands,
 	VerbLook,
-	//VerbExamine,
+	VerbExamine,
 	VerbGo,
+	VerbTeleport,
 	VerbTake,
+	VerbDrop,
 	VerbUse,
+	VerbTalk,
+	VerbInventory,
+	VerbQuit,
 }

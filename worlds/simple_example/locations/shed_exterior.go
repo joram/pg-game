@@ -1,16 +1,22 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+)
 
 var LocationNameShedExterior = "Shed Exterior"
 
 type ShedExterior struct {
+	interfaces.BaseLocation
 	hingeRemoved bool
 }
 
 func NewShedExterior(world interfaces.WorldInterface) *ShedExterior {
 	return &ShedExterior{
 		hingeRemoved: false,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -50,8 +56,7 @@ func (s *ShedExterior) Describe() string {
 	return desc
 }
 
-func (s *ShedExterior) ListKnownItems() []interfaces.ItemInterface { return nil }
-func (s *ShedExterior) TakeItemByName(interfaces.WorldInterface, string) (interfaces.ItemInterface, string) {
+func (s *ShedExterior) TakeItemByName(string) (interfaces.ItemInterface, string) {
 	return nil, "There's nothing here worth taking."
 }
 
@@ -63,16 +68,16 @@ func (s *ShedExterior) UseItem(item interfaces.ItemInterface, target string) (st
 	return "That doesn't seem to work.", true
 }
 
-func (s *ShedExterior) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (s *ShedExterior) Go(dir string) (string, *interfaces.LocationInterface) {
 	switch dir {
 	case "west":
-		return true, "You head back to the fork.", world.GetLocationByName("Forked Path")
+		return "You head back to the fork.", s.BaseLocation.World.GetLocationByName("Forked Path")
 	case "in":
 		if s.hingeRemoved {
-			return true, "You slip into the dark shed interior.", world.GetLocationByName("Shed Interior")
+			return "You slip into the dark shed interior.", s.BaseLocation.World.GetLocationByName("Shed Interior")
 		}
-		return false, "The door won't budge; the hinge is still holding.", nil
+		return "The door won't budge; the hinge is still holding.", nil
 	default:
-		return false, "You can't go that way.", nil
+		return "You can't go that way.", nil
 	}
 }

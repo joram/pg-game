@@ -1,27 +1,23 @@
-package simple_example
+package locations
 
 import (
+	"fmt"
 	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+	"github.com/veilstream/psql-text-based-adventure/worlds/simple_example/items"
 )
-
-type CrystalShard struct{}
-
-func (c CrystalShard) Name() string        { return "Crystal Shard" }
-func (c CrystalShard) Description() string { return "A shiny crystal shard that sparkles faintly." }
-func (c CrystalShard) Examine() string {
-	return "The crystal shard sparkles faintly, it seems to be a piece of a larger crystal."
-}
 
 type GoblinCamp struct {
 	tookShard    bool
 	helped       bool
 	goblinRanOff bool
-	world        interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewGoblinCamp(world interfaces.WorldInterface) *GoblinCamp {
 	return &GoblinCamp{
-		world: world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -42,24 +38,16 @@ func (g *GoblinCamp) Describe() string {
 	}
 	return "The goblin is busy stirring his stew. He seems happy and content." + directionsDescription
 }
-
-func (g *GoblinCamp) ListKnownItems() []interfaces.ItemInterface {
-	if g.helped && !g.tookShard {
-		return []interfaces.ItemInterface{CrystalShard{}}
-	}
-	return nil
-}
-
-func (g *GoblinCamp) TakeItemByName(world interfaces.WorldInterface, name string) (interfaces.ItemInterface, string) {
+func (g *GoblinCamp) TakeItemByName(name string) (interfaces.ItemInterface, string) {
 	if name == "crystal shard" && g.helped && !g.tookShard {
 		g.tookShard = true
-		return CrystalShard{}, "You take the crystal shard the goblin left for you."
+		return items.CrystalShard{}, "You take the crystal shard the goblin left for you."
 	}
 	return nil, "You can't take that."
 }
 
 func (g *GoblinCamp) UseItem(item interfaces.ItemInterface, target string) (string, bool) {
-	if item.Name() == "mushroom" && !g.helped && target == "goblin" {
+	if item.Name() == "glowing mushroom" && !g.helped && target == "goblin" {
 		g.helped = true
 		return "The goblin gobbles the mushroom and grins. He tosses you a shiny shard from his satchel!", false
 	}
@@ -70,7 +58,7 @@ func (g *GoblinCamp) UseItem(item interfaces.ItemInterface, target string) (stri
 		return "You dip your sword in the stew, nothing happens.", true
 	}
 
-	bowl, ok := item.(ItemBowl)
+	bowl, ok := item.(items.ItemBowl)
 	if ok && target == "stew" {
 		if bowl.Full {
 			return "You cannot do that with a full bowl.", true
@@ -86,12 +74,29 @@ func (g *GoblinCamp) UseItem(item interfaces.ItemInterface, target string) (stri
 	return "That doesn't do anything here.", true
 }
 
-func (g *GoblinCamp) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (g *GoblinCamp) Go(dir string) (string, *interfaces.LocationInterface) {
 	if dir == "south" {
-		return true, "You head south to the mushroom grove.", world.GetLocationByName("Mushroom Grove")
+		return "You head south to the mushroom grove.", g.BaseLocation.World.GetLocationByName("Mushroom Grove")
 	}
 	if dir == "west" {
-		return true, "You go back to the cave mouth.", world.GetLocationByName("Cave Mouth")
+		return "You go back to the cave mouth.", g.BaseLocation.World.GetLocationByName("Cave Mouth")
 	}
-	return false, "You can't go that way.", nil
+	return "You can't go that way.", nil
+}
+
+func (g *GoblinCamp) Examine(name string) string {
+	if name == "goblin" {
+		return "The goblin is small, green, and surprisingly tidy. He looks up hopefully at your satchel."
+	}
+	return fmt.Sprintf("You don't notice anything special about the %s.", name)
+}
+
+func (g *GoblinCamp) TalkTo(name string) string {
+	if name == "goblin" {
+		if g.helped {
+			return "The goblin grins. 'Thanks again, friend!'"
+		}
+		return "The goblin grumbles. 'Glowy... need glowy mushroom...'"
+	}
+	return ""
 }

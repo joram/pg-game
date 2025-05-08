@@ -1,16 +1,20 @@
-package simple_example
+package locations
 
-import "github.com/veilstream/psql-text-based-adventure/core/interfaces"
+import (
+	"github.com/veilstream/psql-text-based-adventure/core/interfaces"
+)
 
 var LocationNameForkedPath = "Forked Path"
 
 type ForkedPath struct {
-	world interfaces.WorldInterface
+	interfaces.BaseLocation
 }
 
 func NewForkedPath(world interfaces.WorldInterface) *ForkedPath {
 	return &ForkedPath{
-		world: world,
+		BaseLocation: interfaces.BaseLocation{
+			World: world,
+		},
 	}
 }
 
@@ -37,21 +41,20 @@ func (l ForkedPath) Describe() string {
 	return "The path splits here: to the east stands a decrepit wooden shed; to the west a tangle of ivy hides a small garden clearing."
 }
 
-func (l ForkedPath) ListKnownItems() []interfaces.ItemInterface { return nil }
-func (l ForkedPath) TakeItemByName(interfaces.WorldInterface, string) (interfaces.ItemInterface, string) {
+func (l ForkedPath) TakeItemByName(string) (interfaces.ItemInterface, string) {
 	return nil, "There is nothing to take here."
 }
 
-func (l ForkedPath) Go(world interfaces.WorldInterface, dir string) (bool, string, interfaces.LocationInterface) {
+func (l ForkedPath) Go(dir string) (string, *interfaces.LocationInterface) {
 	switch dir {
 	case "south":
-		return true, "You retrace your steps toward the house.", world.GetLocationByName("Woods Entrance")
+		return "You retrace your steps toward the house.", l.BaseLocation.World.GetLocationByName("Woods Entrance")
 	case "east":
-		return true, "You step toward the listing shed.", world.GetLocationByName("Shed Exterior")
+		return "You step toward the listing shed.", l.BaseLocation.World.GetLocationByName("Shed Exterior")
 	case "west":
-		return true, "You push through the undergrowth toward the garden.", world.GetLocationByName("Overgrown Garden")
+		return "You push through the undergrowth toward the garden.", l.BaseLocation.World.GetLocationByName("Overgrown Garden")
 	default:
-		return false, "That direction leads nowhere discernible.", nil
+		return "That direction leads nowhere discernible.", nil
 	}
 }
 
