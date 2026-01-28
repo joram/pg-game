@@ -78,7 +78,6 @@ func handleSSLRequest(conn net.Conn) (*tls.Conn, error) {
 
 func upgradeBackendToTls(backend pgproto3.Backend, client net.Conn) (*pgproto3.Backend, error) {
 	msg, err := backend.ReceiveStartupMessage()
-	fmt.Printf("Received startup message: %T\n", msg)
 	if err != nil {
 		log.Printf("failed to receive startup message: %v", err)
 		return nil, err
