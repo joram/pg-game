@@ -32,6 +32,7 @@ type GameResponse struct {
 	NpcsToAdd            []NPCUpdate    `json:"npcs_to_add,omitempty"`
 	NpcsToUpdate         []NPCUpdate    `json:"npcs_to_update,omitempty"`
 	NpcsToRemove         []int          `json:"npcs_to_remove,omitempty"`
+	NpcInteractions      []NPCInteraction `json:"npc_interactions,omitempty"` // New interactions to record
 	LocationsToAdd       []LocationUpdate `json:"locations_to_add,omitempty"`
 	LocationsToUpdate    []LocationUpdate `json:"locations_to_update,omitempty"`
 	PlayerStateUpdates   map[string]interface{} `json:"player_state_updates,omitempty"`
@@ -55,6 +56,13 @@ type LocationUpdate struct {
 	ID          int    `json:"id,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+}
+
+type NPCInteraction struct {
+	NpcID      int    `json:"npc_id"`      // Required: ID of the NPC
+	PlayerID   int    `json:"player_id,omitempty"` // Optional: defaults to 1
+	Interaction string `json:"interaction"` // Required: description of what happened
+	Sentiment  string `json:"sentiment,omitempty"` // Optional: "positive", "negative", "neutral"
 }
 
 func NewEngine(psqlBackend *pgproto3.Backend) *Engine {
@@ -229,7 +237,10 @@ func (engine *Engine) handleQuery(query string) {
 	world := engine.getWorld()
 	items := engine.getItems()
 	worldItems := engine.getWorldItems()
-	npcs := engine.getNpcs()
+	
+	// Get current player location
+	currentLocationID := engine.getCurrentPlayerLocation()
+	npcs := engine.getNpcsForLocation(currentLocationID)
 
 	jsonSchema := `{
 		"type": "object",
@@ -306,6 +317,20 @@ func (engine *Engine) handleQuery(query string) {
 			"type": "array",
 			"items": {"type": "integer"}
 			},
+			"npc_interactions": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+				"npc_id": {"type": "integer"},
+				"player_id": {"type": "integer"},
+				"interaction": {"type": "string"},
+				"sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]}
+				},
+				"required": ["npc_id", "interaction"]
+			},
+			"description": "Record new interactions between NPCs and the player. Use this when the player talks to, helps, or interacts with an NPC."
+			},
 			"locations_to_add": {
 			"type": "array",
 			"items": {
@@ -333,11 +358,21 @@ func (engine *Engine) handleQuery(query string) {
 		"required": ["dungeon_master_response"]
 	}`
 
+	// Get current player location for context
+	var locationContext string
+	if currentLocationID > 0 {
+		var locationName string
+		err := engine.db.QueryRow(context.Background(), "SELECT name FROM locations WHERE id = $1", currentLocationID).Scan(&locationName)
+		if err == nil {
+			locationContext = fmt.Sprintf("\n## Current Player Location: %s (ID: %d)\nNote: Only NPCs in this location will show their interaction history with the player.", locationName, currentLocationID)
+		}
+	}
+	
 	systemPrompt := fmt.Sprintf(`You are a dungeon master for a text adventure game. You must respond ONLY with valid JSON in the exact format specified below.
 
 # Current World State
 ## Locations:
-%s
+%s%s
 
 ## Items in Inventory:
 %s
@@ -345,8 +380,10 @@ func (engine *Engine) handleQuery(query string) {
 ## Items in the World:
 %s
 
-## NPCs:
+## NPCs (in current location with interaction history):
 %s
+
+IMPORTANT: The "Interaction History" shown for each NPC contains the actual recorded history of interactions between the player and that NPC. When the player asks about their history with an NPC, you MUST reference the specific interactions listed in the Interaction History. Do not make up or ignore the interaction history - it is the factual record of what has happened.
 
 # Response Format
 You MUST respond with a JSON object matching this schema:
@@ -361,7 +398,15 @@ You MUST respond with a JSON object matching this schema:
 6. When removing, provide the id in the appropriate _to_remove array
 7. When a player takes/picks up an item, add the item ID to items_to_add_to_inventory array
 8. When a player drops/loses an item, add the item ID to items_to_remove_from_inventory array
-9. Be creative and respond to player actions appropriately`, world, items, worldItems, npcs, jsonSchema)
+9. When the player interacts with an NPC (talks, helps, threatens, etc.), add an entry to npc_interactions with:
+   - npc_id: The ID of the NPC
+   - interaction: A brief description of what happened (e.g., "Player was friendly and helpful", "Player insulted the NPC", "Player gave the NPC a gift")
+   - sentiment: "positive", "negative", or "neutral" based on how the NPC would perceive the interaction
+10. When the player moves to a new location, update player_state_updates with {"current_location_id": <location_id>}
+11. NPCs remember past interactions - ALWAYS use the interaction history shown above to inform their responses
+12. When the player asks about their history with an NPC, reference the specific interactions from the Interaction History field
+13. Only NPCs in the player's current location will show their interaction history - this helps focus on relevant NPCs
+14. Be creative and respond to player actions appropriately`, world, locationContext, items, worldItems, npcs, jsonSchema)
 
 	response, err := engine.llm.Messages.New(
 		context.Background(),
@@ -626,6 +671,75 @@ func (engine *Engine) applyGameUpdates(response *GameResponse) {
 		}
 	}
 	
+	// Save NPC interactions
+	for _, interaction := range response.NpcInteractions {
+		playerID := interaction.PlayerID
+		if playerID == 0 {
+			playerID = 1 // Default to player 1
+		}
+		
+		// Verify NPC exists
+		var npcExists bool
+		err := engine.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM npcs WHERE id = $1)", interaction.NpcID).Scan(&npcExists)
+		if err != nil {
+			fmt.Printf("Error checking if NPC %d exists: %v\n", interaction.NpcID, err)
+			continue
+		}
+		if !npcExists {
+			fmt.Printf("Warning: NPC %d does not exist, skipping interaction\n", interaction.NpcID)
+			continue
+		}
+		
+		// Verify player exists
+		var playerExists bool
+		err = engine.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM players WHERE id = $1)", playerID).Scan(&playerExists)
+		if err != nil {
+			fmt.Printf("Error checking if player %d exists: %v\n", playerID, err)
+			continue
+		}
+		if !playerExists {
+			fmt.Printf("Warning: Player %d does not exist, skipping interaction\n", playerID)
+			continue
+		}
+		
+		// Validate sentiment if provided
+		sentiment := interaction.Sentiment
+		if sentiment != "" && sentiment != "positive" && sentiment != "negative" && sentiment != "neutral" {
+			sentiment = "neutral" // Default to neutral if invalid
+		}
+		
+		_, err = engine.db.Exec(ctx,
+			"INSERT INTO npc_player_interactions (npc_id, player_id, interaction, sentiment) VALUES ($1, $2, $3, $4)",
+			interaction.NpcID, playerID, interaction.Interaction, sentiment,
+		)
+		if err != nil {
+			fmt.Printf("Error saving interaction with NPC %d: %v\n", interaction.NpcID, err)
+		} else {
+			fmt.Printf("Recorded interaction: NPC %d - %s [%s]\n", interaction.NpcID, interaction.Interaction, sentiment)
+		}
+	}
+	
+	// Handle player state updates (including location changes)
+	if response.PlayerStateUpdates != nil {
+		if currentLocationID, ok := response.PlayerStateUpdates["current_location_id"].(float64); ok {
+			locationIDInt := int(currentLocationID)
+			// Verify location exists
+			var exists bool
+			err := engine.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM locations WHERE id = $1)", locationIDInt).Scan(&exists)
+			if err == nil && exists {
+				_, err = engine.db.Exec(ctx, "UPDATE players SET current_location_id = $1 WHERE id = 1", locationIDInt)
+				if err != nil {
+					fmt.Printf("Error updating player location: %v\n", err)
+				} else {
+					fmt.Printf("Updated player location to %d\n", locationIDInt)
+				}
+			} else if err == nil {
+				fmt.Printf("Warning: Location %d does not exist, skipping location update\n", locationIDInt)
+			}
+		}
+		// Handle other player state updates here if needed
+	}
+	
 	// Upsert locations (combine add and update)
 	allLocations := append(response.LocationsToAdd, response.LocationsToUpdate...)
 	for _, location := range allLocations {
@@ -759,16 +873,40 @@ func (engine *Engine) getWorldItems() string {
 	return strings.Join(items, "\n\n")
 }
 
-func (engine *Engine) getNpcs() string {
+// getCurrentPlayerLocation returns the current location ID for player 1
+func (engine *Engine) getCurrentPlayerLocation() int {
+	ctx := context.Background()
+	var locationID int
+	err := engine.db.QueryRow(ctx, 
+		"SELECT COALESCE(current_location_id, 0) FROM players WHERE id = 1",
+	).Scan(&locationID)
+	if err != nil {
+		fmt.Printf("Error getting current player location: %v\n", err)
+		return 0
+	}
+	return locationID
+}
+
+// getNpcsForLocation returns NPCs in the specified location with their interaction history
+// Only returns NPCs that are in the specified location (locationID > 0)
+func (engine *Engine) getNpcsForLocation(locationID int) string {
 	ctx := context.Background()
 	var npcs []string
 	
-	rows, err := engine.db.Query(ctx, `
-		SELECT n.name, n.description, l.name as location_name 
+	// Only return NPCs if we have a valid location
+	if locationID <= 0 {
+		return "No NPCs at current location (player location not set)."
+	}
+	
+	query := `
+		SELECT n.id, n.name, n.description, l.name as location_name, n.location_id
 		FROM npcs n 
 		LEFT JOIN locations l ON n.location_id = l.id 
+		WHERE n.location_id = $1
 		ORDER BY n.id
-	`)
+	`
+	
+	rows, err := engine.db.Query(ctx, query, locationID)
 	if err != nil {
 		fmt.Printf("Error querying NPCs: %v\n", err)
 		return "Unable to load NPCs."
@@ -776,22 +914,106 @@ func (engine *Engine) getNpcs() string {
 	defer rows.Close()
 	
 	for rows.Next() {
+		var id, npcLocationID int
 		var name, description, locationName string
-		if err := rows.Scan(&name, &description, &locationName); err != nil {
+		if err := rows.Scan(&id, &name, &description, &locationName, &npcLocationID); err != nil {
 			continue
 		}
+		
+		// Get interaction history for NPCs in the current location
+		interactions := engine.getNPCInteractions(ctx, id, 1)
+		
+		npcStr := fmt.Sprintf("ID %d: %s", id, name)
 		if locationName != "" {
-			npcs = append(npcs, fmt.Sprintf("%s (at %s): %s", name, locationName, description))
-		} else {
-			npcs = append(npcs, fmt.Sprintf("%s: %s", name, description))
+			npcStr += fmt.Sprintf(" (at %s)", locationName)
 		}
+		npcStr += fmt.Sprintf(": %s", description)
+		
+		if interactions != "" {
+			npcStr += fmt.Sprintf("\n  Interaction History with Player: %s", interactions)
+			fmt.Printf("NPC %d (%s) has interaction history: %s\n", id, name, interactions)
+		} else {
+			fmt.Printf("NPC %d (%s) has no interaction history\n", id, name)
+		}
+		
+		npcs = append(npcs, npcStr)
 	}
 	
 	if len(npcs) == 0 {
-		return "No NPCs found in the world."
+		return fmt.Sprintf("No NPCs found at current location (ID: %d).", locationID)
 	}
 	
 	return strings.Join(npcs, "\n\n")
+}
+
+// getNpcs returns all NPCs (kept for backward compatibility if needed)
+func (engine *Engine) getNpcs() string {
+	return engine.getNpcsForLocation(0) // 0 means all locations
+}
+
+// getNPCInteractions returns a formatted string of interaction history between an NPC and player
+func (engine *Engine) getNPCInteractions(ctx context.Context, npcID, playerID int) string {
+	// First check if any interactions exist
+	var count int
+	err := engine.db.QueryRow(ctx, `
+		SELECT COUNT(*) 
+		FROM npc_player_interactions 
+		WHERE npc_id = $1 AND player_id = $2
+	`, npcID, playerID).Scan(&count)
+	if err != nil {
+		fmt.Printf("Error counting interactions for NPC %d, player %d: %v\n", npcID, playerID, err)
+		return ""
+	}
+	if count == 0 {
+		fmt.Printf("No interactions found for NPC %d, player %d (count: 0)\n", npcID, playerID)
+		return ""
+	}
+	
+	fmt.Printf("Found %d interactions for NPC %d, player %d, retrieving...\n", count, npcID, playerID)
+	
+	rows, err := engine.db.Query(ctx, `
+		SELECT interaction, COALESCE(sentiment, '') as sentiment, created_at
+		FROM npc_player_interactions
+		WHERE npc_id = $1 AND player_id = $2
+		ORDER BY created_at DESC
+		LIMIT 5
+	`, npcID, playerID)
+	if err != nil {
+		fmt.Printf("Error querying interactions for NPC %d, player %d: %v\n", npcID, playerID, err)
+		return ""
+	}
+	defer rows.Close()
+	
+	var interactions []string
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+		var interaction, sentiment string
+		var createdAt interface{} // We'll format this if needed
+		if err := rows.Scan(&interaction, &sentiment, &createdAt); err != nil {
+			fmt.Printf("Error scanning interaction row %d for NPC %d: %v\n", rowCount, npcID, err)
+			continue
+		}
+		sentimentStr := ""
+		if sentiment != "" {
+			sentimentStr = fmt.Sprintf(" [%s]", sentiment)
+		}
+		interactions = append(interactions, fmt.Sprintf("%s%s", interaction, sentimentStr))
+		fmt.Printf("Scanned interaction %d for NPC %d: %s%s\n", rowCount, npcID, interaction, sentimentStr)
+	}
+	
+	if err := rows.Err(); err != nil {
+		fmt.Printf("Error iterating interaction rows for NPC %d: %v\n", npcID, err)
+	}
+	
+	if len(interactions) == 0 {
+		fmt.Printf("No interactions after scanning for NPC %d (scanned %d rows)\n", npcID, rowCount)
+		return ""
+	}
+	
+	result := strings.Join(interactions, "; ")
+	fmt.Printf("Retrieved %d interactions for NPC %d: %s\n", len(interactions), npcID, result)
+	return result
 }
 
 func (engine *Engine) initDatabase() {
@@ -799,12 +1021,13 @@ func (engine *Engine) initDatabase() {
 	
 	// Create tables
 	queries := []string{
-		"CREATE TABLE IF NOT EXISTS players (id SERIAL PRIMARY KEY, name VARCHAR(255))",
+		"CREATE TABLE IF NOT EXISTS players (id SERIAL PRIMARY KEY, name VARCHAR(255), current_location_id INT REFERENCES locations(id) ON DELETE SET NULL)",
 		"CREATE TABLE IF NOT EXISTS locations (id SERIAL PRIMARY KEY, name VARCHAR(255), description TEXT)",
 		"CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, name VARCHAR(255), description TEXT, location_id INT REFERENCES locations(id) ON DELETE SET NULL)",
 		"CREATE TABLE IF NOT EXISTS npcs (id SERIAL PRIMARY KEY, name VARCHAR(255), description TEXT, location_id INT REFERENCES locations(id) ON DELETE SET NULL)",
 		"CREATE TABLE IF NOT EXISTS player_items (id SERIAL PRIMARY KEY, player_id INT REFERENCES players(id), item_id INT REFERENCES items(id))",
 		"CREATE TABLE IF NOT EXISTS player_notes (id SERIAL PRIMARY KEY, player_id INT REFERENCES players(id), note TEXT)",
+		"CREATE TABLE IF NOT EXISTS npc_player_interactions (id SERIAL PRIMARY KEY, npc_id INT REFERENCES npcs(id) ON DELETE CASCADE, player_id INT REFERENCES players(id) ON DELETE CASCADE, interaction TEXT, sentiment VARCHAR(20), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
 	}
 	for _, query := range queries {
 		_, err := engine.db.Exec(ctx, query)
@@ -826,6 +1049,51 @@ func (engine *Engine) initDatabase() {
 			// Only log if it's not a "column does not exist" or "already correct" error
 			if !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "is not null") {
 				fmt.Printf("Note: Could not alter column (may already be correct): %v\n", err)
+			}
+		}
+	}
+	
+	// Add current_location_id to players table if it doesn't exist (migration)
+	// Check if column exists first
+	var columnExists bool
+	var err2 error
+	err2 = engine.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 
+			FROM information_schema.columns 
+			WHERE table_schema = 'public'
+			AND table_name = 'players' 
+			AND column_name = 'current_location_id'
+		)
+	`).Scan(&columnExists)
+	
+	if err2 != nil {
+		fmt.Printf("Error checking for current_location_id column: %v\n", err2)
+	} else if !columnExists {
+		// Column doesn't exist, add it
+		// First, add the column without the foreign key constraint
+		_, err2 = engine.db.Exec(ctx, `ALTER TABLE players ADD COLUMN current_location_id INT`)
+		if err2 != nil {
+			fmt.Printf("Error adding current_location_id column: %v\n", err2)
+		} else {
+			fmt.Printf("Added current_location_id column to players table\n")
+			
+			// Then add the foreign key constraint (if locations table exists)
+			_, err2 = engine.db.Exec(ctx, `
+				DO $$
+				BEGIN
+					IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'locations') THEN
+						ALTER TABLE players 
+						ADD CONSTRAINT players_current_location_id_fkey 
+						FOREIGN KEY (current_location_id) 
+						REFERENCES locations(id) 
+						ON DELETE SET NULL;
+					END IF;
+				END $$;
+			`)
+			if err2 != nil {
+				// Constraint might already exist
+				fmt.Printf("Note: Could not add foreign key constraint (may already exist): %v\n", err2)
 			}
 		}
 	}
@@ -860,9 +1128,17 @@ func (engine *Engine) ensureDefaultPlayer(ctx context.Context) {
 	}
 	
 	if !exists {
+		// Get the first location as default (or NULL if no locations exist)
+		var defaultLocationID interface{}
+		err := engine.db.QueryRow(ctx, "SELECT id FROM locations ORDER BY id LIMIT 1").Scan(&defaultLocationID)
+		if err != nil {
+			defaultLocationID = nil // No locations yet, will be set when location is created
+		}
+		
 		// Insert player with ID 1
-		_, err := engine.db.Exec(ctx, 
-			"INSERT INTO players (id, name) VALUES (1, 'Player') ON CONFLICT (id) DO NOTHING",
+		_, err = engine.db.Exec(ctx, 
+			"INSERT INTO players (id, name, current_location_id) VALUES (1, 'Player', $1) ON CONFLICT (id) DO NOTHING",
+			defaultLocationID,
 		)
 		if err != nil {
 			fmt.Printf("Error creating default player: %v\n", err)
@@ -879,6 +1155,20 @@ func (engine *Engine) ensureDefaultPlayer(ctx context.Context) {
 		}
 		
 		fmt.Printf("Created default player (ID: 1)\n")
+	} else {
+		// Ensure player has a location if one exists but player doesn't have one set
+		var hasLocation bool
+		err := engine.db.QueryRow(ctx, "SELECT current_location_id IS NOT NULL FROM players WHERE id = 1").Scan(&hasLocation)
+		if err == nil && !hasLocation {
+			var firstLocationID interface{}
+			err := engine.db.QueryRow(ctx, "SELECT id FROM locations ORDER BY id LIMIT 1").Scan(&firstLocationID)
+			if err == nil {
+				_, err = engine.db.Exec(ctx, "UPDATE players SET current_location_id = $1 WHERE id = 1", firstLocationID)
+				if err == nil {
+					fmt.Printf("Set player's location to first available location\n")
+				}
+			}
+		}
 	}
 }
 
@@ -887,6 +1177,7 @@ func (engine *Engine) recreateTables() {
 	
 	// Drop tables in reverse order of dependencies
 	dropQueries := []string{
+		"DROP TABLE IF EXISTS npc_player_interactions",
 		"DROP TABLE IF EXISTS player_notes",
 		"DROP TABLE IF EXISTS player_items",
 		"DROP TABLE IF EXISTS npcs",
@@ -904,12 +1195,13 @@ func (engine *Engine) recreateTables() {
 	
 	// Recreate tables with correct schema
 	createQueries := []string{
-		"CREATE TABLE players (id SERIAL PRIMARY KEY, name VARCHAR(255))",
+		"CREATE TABLE players (id SERIAL PRIMARY KEY, name VARCHAR(255), current_location_id INT REFERENCES locations(id) ON DELETE SET NULL)",
 		"CREATE TABLE locations (id SERIAL PRIMARY KEY, name VARCHAR(255), description TEXT)",
 		"CREATE TABLE items (id SERIAL PRIMARY KEY, name VARCHAR(255), description TEXT, location_id INT REFERENCES locations(id))",
 		"CREATE TABLE npcs (id SERIAL PRIMARY KEY, name VARCHAR(255), description TEXT, location_id INT REFERENCES locations(id))",
 		"CREATE TABLE player_items (id SERIAL PRIMARY KEY, player_id INT REFERENCES players(id), item_id INT REFERENCES items(id))",
 		"CREATE TABLE player_notes (id SERIAL PRIMARY KEY, player_id INT REFERENCES players(id), note TEXT)",
+		"CREATE TABLE npc_player_interactions (id SERIAL PRIMARY KEY, npc_id INT REFERENCES npcs(id) ON DELETE CASCADE, player_id INT REFERENCES players(id) ON DELETE CASCADE, interaction TEXT, sentiment VARCHAR(20), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
 	}
 	
 	for _, query := range createQueries {
@@ -938,6 +1230,17 @@ func (engine *Engine) seedDefaultData() {
 		return
 	}
 	fmt.Printf("Created default location: The Old Tavern (ID: %d)\n", locationID)
+	
+	// Set player's initial location to the default location
+	_, err = engine.db.Exec(ctx,
+		"UPDATE players SET current_location_id = $1 WHERE id = 1",
+		locationID,
+	)
+	if err != nil {
+		fmt.Printf("Warning: Could not set player's initial location: %v\n", err)
+	} else {
+		fmt.Printf("Set player's initial location to The Old Tavern\n")
+	}
 
 	// Insert default items at this location
 	items := []struct {
