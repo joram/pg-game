@@ -28,6 +28,9 @@ func main() {
 		}
 	}()
 
+	// WebSocket server (same container, connects to localhost:5432)
+	go StartWebSocketServer("0.0.0.0:8080")
+
 	listenAddr := "0.0.0.0:5432"
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {

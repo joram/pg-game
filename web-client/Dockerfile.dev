@@ -1,0 +1,15 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Copy package files first so npm install can be cached / run once to seed node_modules
+COPY package.json package-lock.json* ./
+
+# Seed node_modules in the image; when volume is mounted it will override or be pre-populated
+RUN npm install
+
+COPY . .
+
+# Seed node_modules on first start if volume is empty, then run dev server
+ENTRYPOINT ["sh", "-c", "if [ ! -d node_modules ] || [ -z \"$(ls -A node_modules 2>/dev/null)\" ]; then npm install; fi && exec npm run dev"]
+
+EXPOSE 3000

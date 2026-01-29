@@ -13,7 +13,8 @@ This project implements a game server that:
 
 ## Architecture
 
-- **Game Server**: Go application that implements PostgreSQL wire protocol
+- **Game Server**: Go application that implements PostgreSQL wire protocol and WebSocket server (port 8080) for the web client
+- **Web Client**: React-based web interface for playing the game
 - **Database**: PostgreSQL 15 for game state persistence
 - **LLM**: Anthropic Claude 3.5 Sonnet for game logic and narrative generation
 - **Hot Reload**: Air (Cosmtrek/air) for automatic code reloading during development
@@ -43,10 +44,18 @@ This project implements a game server that:
    ```
 
    This will start:
-   - `game-server`: The game server on port 5432 (PostgreSQL protocol)
+   - `game-server`: Game server on port 5432 (PostgreSQL) and port 8080 (WebSocket)
+   - `web-client`: React web interface on port 3000
    - `db`: PostgreSQL database on internal port 5432
 
-4. **Connect to the game** using any PostgreSQL client:
+4. **Connect to the game** using one of these methods:
+
+   **Option A: Web Client (Recommended)**
+   - Open your browser and navigate to `http://localhost:3000`
+   - The web client will automatically connect to the game server
+   - Type commands in the query box (e.g., `look`, `inventory`, `take key`)
+
+   **Option B: PostgreSQL Client**
    ```bash
    psql -h localhost -p 5432 -U postgres -d postgres
    ```
