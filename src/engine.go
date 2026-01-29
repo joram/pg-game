@@ -396,13 +396,20 @@ You MUST respond with a JSON object matching this schema:
 4. When adding items/NPCs/locations, provide name and description
 5. When updating, you must include the id field
 6. When removing, provide the id in the appropriate _to_remove array
-7. When a player takes/picks up an item, add the item ID to items_to_add_to_inventory array
+7. When a player takes/picks up an item:
+   - If the item already exists, add its ID to items_to_add_to_inventory array
+   - If you're creating a new item in items_to_add, you can still add a placeholder ID (like 999) to items_to_add_to_inventory - the system will automatically match it to the newly created item
 8. When a player drops/loses an item, add the item ID to items_to_remove_from_inventory array
 9. When the player interacts with an NPC (talks, helps, threatens, etc.), add an entry to npc_interactions with:
    - npc_id: The ID of the NPC
    - interaction: A brief description of what happened (e.g., "Player was friendly and helpful", "Player insulted the NPC", "Player gave the NPC a gift")
    - sentiment: "positive", "negative", or "neutral" based on how the NPC would perceive the interaction
-10. When the player moves to a new location, update player_state_updates with {"current_location_id": <location_id>}
+10. When the player moves to a new location:
+   - If the location already exists, update player_state_updates with {"current_location_id": <location_id>}
+   - If you're creating a new location in locations_to_add, you can either:
+     a) Use a placeholder ID (like 999) in player_state_updates - the system will auto-match to the newly created location
+     b) Include {"current_location_name": "<location name>"} in player_state_updates to match by name
+     c) The system will automatically move the player to a newly created location if only one location is created
 11. NPCs remember past interactions - ALWAYS use the interaction history shown above to inform their responses
 12. When the player asks about their history with an NPC, reference the specific interactions from the Interaction History field
 13. Only NPCs in the player's current location will show their interaction history - this helps focus on relevant NPCs
@@ -488,18 +495,21 @@ func (engine *Engine) extractJSON(text string) string {
 func (engine *Engine) applyGameUpdates(response *GameResponse) {
 	ctx := context.Background()
 	
+	// Track newly created items by name so we can add them to inventory if needed
+	newItemIDs := make(map[string]int)
+	
 	// Upsert items (combine add and update)
 	allItems := append(response.ItemsToAdd, response.ItemsToUpdate...)
 	for _, item := range allItems {
 		if item.ID > 0 {
-			// Update existing item
+			// Update existing item - only update fields that are provided and non-empty
 			_, err := engine.db.Exec(ctx,
 				`INSERT INTO items (id, name, description, location_id) 
 				 VALUES ($1, $2, $3, CASE WHEN $4 > 0 AND EXISTS(SELECT 1 FROM locations WHERE id = $4) THEN $4 ELSE NULL END)
 				 ON CONFLICT (id) 
 				 DO UPDATE SET 
-				   name = COALESCE(EXCLUDED.name, items.name),
-				   description = COALESCE(EXCLUDED.description, items.description),
+				   name = CASE WHEN EXCLUDED.name != '' THEN EXCLUDED.name ELSE items.name END,
+				   description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE items.description END,
 				   location_id = CASE 
 				     WHEN EXCLUDED.location_id > 0 AND EXISTS(SELECT 1 FROM locations WHERE id = EXCLUDED.location_id) 
 				     THEN EXCLUDED.location_id 
@@ -528,14 +538,18 @@ func (engine *Engine) applyGameUpdates(response *GameResponse) {
 				locationID = nil
 			}
 			
-			_, err := engine.db.Exec(ctx,
-				"INSERT INTO items (name, description, location_id) VALUES ($1, $2, $3)",
+			// Insert and get the new item ID
+			var newItemID int
+			err := engine.db.QueryRow(ctx,
+				"INSERT INTO items (name, description, location_id) VALUES ($1, $2, $3) RETURNING id",
 				item.Name, item.Description, locationID,
-			)
+			).Scan(&newItemID)
 			if err != nil {
 				fmt.Printf("Error adding item %s: %v\n", item.Name, err)
 			} else {
-				fmt.Printf("Added item: %s\n", item.Name)
+				fmt.Printf("Added item ID %d: %s\n", newItemID, item.Name)
+				// Store the new item ID by name for potential inventory addition
+				newItemIDs[strings.ToLower(item.Name)] = newItemID
 			}
 		}
 	}
@@ -593,6 +607,47 @@ func (engine *Engine) applyGameUpdates(response *GameResponse) {
 			}
 		} else {
 			fmt.Printf("Item %d already in inventory, skipping\n", itemID)
+		}
+	}
+	
+	// Handle case where LLM created new items that should be added to inventory
+	// If items_to_add_to_inventory contains IDs that don't exist, try to match them to newly created items
+	// This handles the case where LLM creates an item but doesn't know its ID yet
+	invalidItemIDs := make([]int, 0)
+	for _, itemID := range response.ItemsToAddToInventory {
+		var itemExists bool
+		err := engine.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM items WHERE id = $1)", itemID).Scan(&itemExists)
+		if err == nil && !itemExists {
+			invalidItemIDs = append(invalidItemIDs, itemID)
+		}
+	}
+	
+	// If we have invalid IDs and newly created items, try to match them
+	// Heuristic: if exactly one new item was created and there's exactly one invalid ID, assume they match
+	if len(invalidItemIDs) > 0 && len(newItemIDs) > 0 {
+		if len(invalidItemIDs) == 1 && len(newItemIDs) == 1 {
+			// Single new item and single invalid ID - likely a match
+			for _, newItemID := range newItemIDs {
+				fmt.Printf("Auto-adding newly created item ID %d to inventory (matched with invalid ID %d)\n", newItemID, invalidItemIDs[0])
+				var inInventory bool
+				err := engine.db.QueryRow(ctx,
+					"SELECT EXISTS(SELECT 1 FROM player_items WHERE player_id = 1 AND item_id = $1)",
+					newItemID,
+				).Scan(&inInventory)
+				if err == nil && !inInventory {
+					_, err = engine.db.Exec(ctx,
+						"INSERT INTO player_items (player_id, item_id) VALUES (1, $1) ON CONFLICT DO NOTHING",
+						newItemID,
+					)
+					if err != nil {
+						fmt.Printf("Error auto-adding item %d to inventory: %v\n", newItemID, err)
+					} else {
+						fmt.Printf("Auto-added item %d to player inventory\n", newItemID)
+					}
+				}
+			}
+		} else {
+			fmt.Printf("Warning: Cannot auto-match %d invalid item IDs with %d newly created items (need 1:1 match)\n", len(invalidItemIDs), len(newItemIDs))
 		}
 	}
 	
@@ -720,6 +775,46 @@ func (engine *Engine) applyGameUpdates(response *GameResponse) {
 	}
 	
 	// Handle player state updates (including location changes)
+	// Track newly created locations by name so we can match them to player location updates
+	newLocationIDs := make(map[string]int)
+	
+	// Upsert locations (combine add and update) - do this BEFORE processing player location updates
+	allLocations := append(response.LocationsToAdd, response.LocationsToUpdate...)
+	for _, location := range allLocations {
+		if location.ID > 0 {
+			// Update existing location
+			_, err := engine.db.Exec(ctx,
+				`INSERT INTO locations (id, name, description) 
+				 VALUES ($1, $2, $3)
+				 ON CONFLICT (id) 
+				 DO UPDATE SET 
+				   name = CASE WHEN EXCLUDED.name != '' THEN EXCLUDED.name ELSE locations.name END,
+				   description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE locations.description END`,
+				location.ID, location.Name, location.Description,
+			)
+			if err != nil {
+				fmt.Printf("Error upserting location %d: %v\n", location.ID, err)
+			} else {
+				fmt.Printf("Upserted location ID %d: %s\n", location.ID, location.Name)
+			}
+		} else {
+			// Insert new location and capture the ID
+			var newLocationID int
+			err := engine.db.QueryRow(ctx,
+				"INSERT INTO locations (name, description) VALUES ($1, $2) RETURNING id",
+				location.Name, location.Description,
+			).Scan(&newLocationID)
+			if err != nil {
+				fmt.Printf("Error adding location %s: %v\n", location.Name, err)
+			} else {
+				fmt.Printf("Added location ID %d: %s\n", newLocationID, location.Name)
+				// Store the new location ID by name for potential player location update
+				newLocationIDs[strings.ToLower(location.Name)] = newLocationID
+			}
+		}
+	}
+	
+	// Now process player location updates - can reference newly created locations
 	if response.PlayerStateUpdates != nil {
 		if currentLocationID, ok := response.PlayerStateUpdates["current_location_id"].(float64); ok {
 			locationIDInt := int(currentLocationID)
@@ -734,41 +829,43 @@ func (engine *Engine) applyGameUpdates(response *GameResponse) {
 					fmt.Printf("Updated player location to %d\n", locationIDInt)
 				}
 			} else if err == nil {
+				// Location ID doesn't exist - might be a newly created location
+				// Try to find it in newly created locations by checking if the ID matches any new location
+				// Since we can't match by ID (it's wrong), we'll handle this differently
 				fmt.Printf("Warning: Location %d does not exist, skipping location update\n", locationIDInt)
+			}
+		}
+		// Also check if player_state_updates contains a location name (for newly created locations)
+		if locationName, ok := response.PlayerStateUpdates["current_location_name"].(string); ok && locationName != "" {
+			// Try to find location by name (case-insensitive)
+			var locationID int
+			err := engine.db.QueryRow(ctx, 
+				"SELECT id FROM locations WHERE LOWER(name) = LOWER($1) LIMIT 1",
+				locationName,
+			).Scan(&locationID)
+			if err == nil {
+				_, err = engine.db.Exec(ctx, "UPDATE players SET current_location_id = $1 WHERE id = 1", locationID)
+				if err != nil {
+					fmt.Printf("Error updating player location by name: %v\n", err)
+				} else {
+					fmt.Printf("Updated player location to %d (%s) by name\n", locationID, locationName)
+				}
 			}
 		}
 		// Handle other player state updates here if needed
 	}
 	
-	// Upsert locations (combine add and update)
-	allLocations := append(response.LocationsToAdd, response.LocationsToUpdate...)
-	for _, location := range allLocations {
-		if location.ID > 0 {
-			// Update existing location
-			_, err := engine.db.Exec(ctx,
-				`INSERT INTO locations (id, name, description) 
-				 VALUES ($1, $2, $3)
-				 ON CONFLICT (id) 
-				 DO UPDATE SET 
-				   name = COALESCE(EXCLUDED.name, locations.name),
-				   description = COALESCE(EXCLUDED.description, locations.description)`,
-				location.ID, location.Name, location.Description,
-			)
+	// Auto-update: If exactly one new location was created and player action suggests movement,
+	// automatically move player to that location (heuristic for when LLM doesn't provide location update)
+	if len(newLocationIDs) == 1 && response.PlayerStateUpdates == nil {
+		// Only one new location created and no explicit location update - likely the player moved there
+		for locationName, locationID := range newLocationIDs {
+			fmt.Printf("Auto-updating player location to newly created location %d (%s)\n", locationID, locationName)
+			_, err := engine.db.Exec(ctx, "UPDATE players SET current_location_id = $1 WHERE id = 1", locationID)
 			if err != nil {
-				fmt.Printf("Error upserting location %d: %v\n", location.ID, err)
+				fmt.Printf("Error auto-updating player location: %v\n", err)
 			} else {
-				fmt.Printf("Upserted location ID %d: %s\n", location.ID, location.Name)
-			}
-		} else {
-			// Insert new location
-			_, err := engine.db.Exec(ctx,
-				"INSERT INTO locations (name, description) VALUES ($1, $2)",
-				location.Name, location.Description,
-			)
-			if err != nil {
-				fmt.Printf("Error adding location %s: %v\n", location.Name, err)
-			} else {
-				fmt.Printf("Added location: %s\n", location.Name)
+				fmt.Printf("Auto-updated player location to %d\n", locationID)
 			}
 		}
 	}
@@ -825,6 +922,13 @@ func (engine *Engine) getItems() string {
 		var name, description string
 		if err := rows.Scan(&id, &name, &description); err != nil {
 			continue
+		}
+		// Handle empty names gracefully
+		if name == "" {
+			name = fmt.Sprintf("Unnamed Item (ID %d)", id)
+		}
+		if description == "" {
+			description = "No description available"
 		}
 		items = append(items, fmt.Sprintf("ID %d: %s: %s", id, name, description))
 	}
